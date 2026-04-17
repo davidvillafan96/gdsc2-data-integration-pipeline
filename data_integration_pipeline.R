@@ -31,7 +31,7 @@ compounds <- clean_names(compounds)
 cell_lines <- clean_names(cell_lines)
 
 # ==========================================
-# 4. MERGE DATASETS
+# 4. PREPROCESS & MERGE DATASETS
 # ==========================================
 compounds_unique <- compounds %>%
   select(DRUG_NAME, TARGET, TARGET_PATHWAY) %>%
@@ -46,7 +46,7 @@ final_dataset <- gdsc2 %>%
   )
 
 # ==========================================
-# 5. INITIAL DATA CHECK
+# 5. INITIAL DATA QUALITY CHECK
 # ==========================================
 initial_rows <- nrow(final_dataset)
 missing_ic50 <- sum(is.na(final_dataset$LN_IC50))
@@ -69,23 +69,12 @@ duplicates_removed <- (initial_rows - missing_ic50) - final_rows
 
 cat("\n--- DATA CLEANING SUMMARY ---\n")
 cat("Initial rows:", initial_rows, "\n")
-cat("Rows removed due to missing LN_IC50:", missing_ic50, "\n")
+cat("Rows removed (missing LN_IC50):", missing_ic50, "\n")
 cat("Duplicates removed:", duplicates_removed, "\n")
 cat("Final dataset size:", final_rows, "\n")
 
 # ==========================================
-# 7. STANDARDIZATION (SCALING)
-# ==========================================
-final_dataset <- final_dataset %>%
-  mutate(
-    LN_IC50_scaled = scale(LN_IC50)[,1],
-    AUC_scaled     = scale(AUC)[,1],
-    RMSE_scaled    = scale(RMSE)[,1],
-    Z_SCORE_scaled = scale(Z_SCORE)[,1]
-  )
-
-# ==========================================
-# 8. OUTLIER DETECTION
+# 7. OUTLIER DETECTION
 # ==========================================
 final_dataset <- final_dataset %>%
   group_by(DRUG_NAME) %>%
@@ -101,12 +90,10 @@ final_dataset <- final_dataset %>%
   ) %>%
   ungroup()
 
-# ==========================================
-# 9. OUTLIER SUMMARY
-# ==========================================
 cat("\n--- OUTLIER SUMMARY ---\n")
 print(table(final_dataset$Outlier_Flag))
 
+# Top extreme sensitivities
 cat("\n--- TOP 10 EXTREME SENSITIVITY CASES ---\n")
 top_hits <- final_dataset %>%
   filter(Outlier_Flag == "Extreme Sensitivity") %>%
@@ -123,30 +110,41 @@ top_hits <- final_dataset %>%
 print(top_hits)
 
 # ==========================================
-# 10. CORRELATION ANALYSIS (SCALED VARIABLES)
+# 8. MISSING DATA ANALYSIS
 # ==========================================
-num_cols_scaled <- final_dataset %>%
-  select(ends_with("_scaled")) %>%
-  drop_na()
+missing_data <- as.data.frame(
+  colSums(is.na(final_dataset)) / nrow(final_dataset) * 100
+)
+colnames(missing_data) <- "Percent_Missing"
+missing_data$Variable <- rownames(missing_data)
 
-if(ncol(num_cols_scaled) > 1) {
-  res_cor <- cor(num_cols_scaled)
-  corrplot(res_cor,
-           method = "color",
-           addCoef.col = "black",
-           tl.col = "black",
-           title = "Correlation Matrix of Scaled Pharmacological Metrics",
-           mar = c(0,0,1,0))
-}
+ggplot(missing_data, aes(x = reorder(Variable, Percent_Missing), y = Percent_Missing)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Missing Data Overview", y = "% Missing", x = "Variables")
 
 # ==========================================
-# 11. CONTROL VISUALIZATIONS
+# 9. CONTROL VISUALIZATIONS
 # ==========================================
+
+# A. Distribution
 ggplot(final_dataset, aes(x = LN_IC50)) +
   geom_density(fill = "steelblue", alpha = 0.6) +
   theme_minimal() +
   labs(title = "Distribution of LN_IC50")
 
+# B. Cancer type distribution
+final_dataset %>%
+  count(`Cancer Type (matching TCGA label)`) %>%
+  filter(!is.na(`Cancer Type (matching TCGA label)`)) %>%
+  ggplot(aes(x = reorder(`Cancer Type (matching TCGA label)`, n), y = n)) +
+  geom_col(fill = "darkgreen") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Cell Line Distribution by Cancer Type")
+
+# C. Correlation LN_IC50 vs AUC
 ggplot(final_dataset, aes(x = LN_IC50, y = AUC)) +
   geom_point(alpha = 0.1, color = "purple") +
   geom_smooth(method = "lm", color = "black") +
@@ -154,7 +152,23 @@ ggplot(final_dataset, aes(x = LN_IC50, y = AUC)) +
   labs(title = "LN_IC50 vs AUC Correlation")
 
 # ==========================================
-# 12. SAVE DATA
+# 10. CORRELATION MATRIX
+# ==========================================
+num_vars <- final_dataset %>%
+  select(LN_IC50, AUC, RMSE, Z_SCORE) %>%
+  drop_na()
+
+if (ncol(num_vars) > 1) {
+  corrplot(cor(num_vars),
+           method = "color",
+           addCoef.col = "black",
+           tl.col = "black",
+           title = "\nCorrelation Matrix",
+           mar = c(0,0,1,0))
+}
+
+# ==========================================
+# 11. SAVE FINAL DATASET
 # ==========================================
 write_csv(final_dataset, "outputs/GDSC2_Final_Master_Clean.csv")
 
